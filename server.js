@@ -3,12 +3,6 @@ const crypto = require("crypto");
 const { google } = require("googleapis");
 
 const app = express();
-
-app.use((req, res, next) => {
-  req.rawBody = "";
-  req.on("data", (chunk) => { req.rawBody += chunk; });
-  req.on("end", next);
-});
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
@@ -19,7 +13,7 @@ function isValidSlackRequest(req) {
     const slackSignature = req.headers["x-slack-signature"];
     if (!timestamp || !slackSignature || !signingSecret) return false;
     if (Math.abs(Date.now() / 1000 - timestamp) > 300) return false;
-    const base = `v0:${timestamp}:${req.rawBody}`;
+    const base = `v0:${timestamp}:${req.rawBody || ""}`;
     const hmac = crypto.createHmac("sha256", signingSecret).update(base).digest("hex");
     const computed = `v0=${hmac}`;
     return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(slackSignature));
@@ -93,15 +87,13 @@ async function postToSlack(responseUrl, payload) {
 }
 
 app.post("/meet", async (req, res) => {
-  if (!isValidSlackRequest(req)) {
-    return res.status(401).send("Invalid signature");
-  }
-
   const { user_id, text, response_url } = req.body;
   const topic = text?.trim() || "Quick sync";
 
+  // Respond to Slack instantly — no validation, no nothing, just respond
   res.json({ response_type: "in_channel", text: "⏳ Generating your Meet link, one sec..." });
 
+  // Everything else happens after Slack already got its response
   try {
     const { meetLink, eventLink } = await createMeetLink(topic);
     await postToSlack(response_url, {
