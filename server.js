@@ -8,10 +8,10 @@ app.get("/", (req, res) => res.send("Meet Bot is running ✅"));
 
 app.post("/meet", async (req, res) => {
   try {
-    const { google } = require("googleapis");
-    res.json({ response_type: "in_channel", text: "✅ googleapis loaded successfully!" });
+    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    res.json({ response_type: "in_channel", text: `✅ JSON parsed! Service account: ${credentials.client_email}` });
   } catch (err) {
-    res.json({ response_type: "in_channel", text: `❌ Error: ${err.message}` });
+    res.json({ response_type: "in_channel", text: `❌ JSON parse failed: ${err.message}` });
   }
 });
 
