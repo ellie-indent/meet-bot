@@ -1,5 +1,4 @@
 const express = require("express");
-const crypto = require("crypto");
 const { google } = require("googleapis");
 
 const app = express();
@@ -10,7 +9,7 @@ function getGoogleAuth() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
   return new google.auth.GoogleAuth({
     credentials,
-    scopes: ["https://www.googleapis.com/auth/calendar"],
+    scopes: ["https://www.googleapis.com/auth/calendar.events"],
     clientOptions: {
       subject: process.env.GOOGLE_IMPERSONATE_EMAIL,
     },
@@ -19,39 +18,54 @@ function getGoogleAuth() {
 
 async function createMeetLink(topic) {
   const auth = getGoogleAuth();
-  const calendar = google.calendar({ version: "v3", auth });
+  const authClient = await auth.getClient();
+  const token = await authClient.getAccessToken();
+
   const start = new Date();
   const end = new Date(start.getTime() + 60 * 60 * 1000);
 
-  const event = await calendar.events.insert({
-    calendarId: process.env.GOOGLE_CALENDAR_ID,
-    conferenceDataVersion: 1,
-    requestBody: {
-      summary: topic || "Quick Meet",
-      start: { dateTime: start.toISOString() },
-      end: { dateTime: end.toISOString() },
-      conferenceData: {
-        createRequest: {
-          requestId: `meet-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          conferenceSolutionKey: { type: "hangoutsMeet" },
-        },
+  const calendarId = encodeURIComponent(process.env.GOOGLE_IMPERSONATE_EMAIL);
+
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events?conferenceDataVersion=1`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token.token}`,
+        "Content-Type": "application/json",
       },
-    },
-  });
+      body: JSON.stringify({
+        summary: topic || "Quick Meet",
+        start: { dateTime: start.toISOString() },
+        end: { dateTime: end.toISOString() },
+        conferenceData: {
+          createRequest: {
+            requestId: `meet-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            conferenceSolutionKey: { type: "hangoutsMeet" },
+          },
+        },
+      }),
+    }
+  );
 
-  // Log everything Google sends back so we can see what's happening
-  console.log("CONFERENCE DATA:", JSON.stringify(event.data.conferenceData, null, 2));
-  console.log("HANGOUT LINK:", event.data.hangoutLink);
+  const data = await response.json();
+  console.log("RESPONSE STATUS:", response.status);
+  console.log("CONFERENCE DATA:", JSON.stringify(data.conferenceData, null, 2));
+  console.log("HANGOUT LINK:", data.hangoutLink);
 
-  let meetLink =
-    event.data.conferenceData?.entryPoints?.find((ep) => ep.entryPointType === "video")?.uri ||
-    event.data.hangoutLink;
-
-  if (!meetLink) {
-    throw new Error(`No Meet link returned. Conference data: ${JSON.stringify(event.data.conferenceData)}`);
+  if (!response.ok) {
+    throw new Error(`Google API error: ${JSON.stringify(data.error)}`);
   }
 
-  return { meetLink, eventLink: event.data.htmlLink };
+  const meetLink =
+    data.conferenceData?.entryPoints?.find((ep) => ep.entryPointType === "video")?.uri ||
+    data.hangoutLink;
+
+  if (!meetLink) {
+    throw new Error(`No Meet link returned. Conference data: ${JSON.stringify(data.conferenceData)}`);
+  }
+
+  return { meetLink, eventLink: data.htmlLink };
 }
 
 async function postToSlack(responseUrl, payload) {
