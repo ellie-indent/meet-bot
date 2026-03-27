@@ -27,6 +27,9 @@ function getGoogleAuth() {
   return new google.auth.GoogleAuth({
     credentials,
     scopes: ["https://www.googleapis.com/auth/calendar"],
+    clientOptions: {
+      subject: process.env.GOOGLE_IMPERSONATE_EMAIL,
+    },
   });
 }
 
