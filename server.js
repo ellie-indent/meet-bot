@@ -6,22 +6,6 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-function isValidSlackRequest(req) {
-  try {
-    const signingSecret = process.env.SLACK_SIGNING_SECRET;
-    const timestamp = req.headers["x-slack-request-timestamp"];
-    const slackSignature = req.headers["x-slack-signature"];
-    if (!timestamp || !slackSignature || !signingSecret) return false;
-    if (Math.abs(Date.now() / 1000 - timestamp) > 300) return false;
-    const base = `v0:${timestamp}:${req.rawBody || ""}`;
-    const hmac = crypto.createHmac("sha256", signingSecret).update(base).digest("hex");
-    const computed = `v0=${hmac}`;
-    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(slackSignature));
-  } catch {
-    return false;
-  }
-}
-
 function getGoogleAuth() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
   return new google.auth.GoogleAuth({
@@ -40,7 +24,7 @@ async function createMeetLink(topic) {
   const end = new Date(start.getTime() + 60 * 60 * 1000);
 
   const event = await calendar.events.insert({
-    calendarId: process.env.GOOGLE_CALENDAR_ID || "primary",
+    calendarId: process.env.GOOGLE_CALENDAR_ID,
     conferenceDataVersion: 1,
     requestBody: {
       summary: topic || "Quick Meet",
@@ -55,27 +39,16 @@ async function createMeetLink(topic) {
     },
   });
 
+  // Log everything Google sends back so we can see what's happening
+  console.log("CONFERENCE DATA:", JSON.stringify(event.data.conferenceData, null, 2));
+  console.log("HANGOUT LINK:", event.data.hangoutLink);
+
   let meetLink =
     event.data.conferenceData?.entryPoints?.find((ep) => ep.entryPointType === "video")?.uri ||
     event.data.hangoutLink;
 
   if (!meetLink) {
-    const eventId = event.data.id;
-    for (let i = 0; i < 5; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const updated = await calendar.events.get({
-        calendarId: process.env.GOOGLE_CALENDAR_ID || "primary",
-        eventId,
-      });
-      meetLink =
-        updated.data.conferenceData?.entryPoints?.find((ep) => ep.entryPointType === "video")?.uri ||
-        updated.data.hangoutLink;
-      if (meetLink) break;
-    }
-  }
-
-  if (!meetLink) {
-    throw new Error("Google did not return a Meet link. Make sure Google Meet is enabled for your Workspace.");
+    throw new Error(`No Meet link returned. Conference data: ${JSON.stringify(event.data.conferenceData)}`);
   }
 
   return { meetLink, eventLink: event.data.htmlLink };
@@ -93,10 +66,8 @@ app.post("/meet", async (req, res) => {
   const { user_id, text, response_url } = req.body;
   const topic = text?.trim() || "Quick sync";
 
-  // Respond to Slack instantly — no validation, no nothing, just respond
   res.json({ response_type: "in_channel", text: "⏳ Generating your Meet link, one sec..." });
 
-  // Everything else happens after Slack already got its response
   try {
     const { meetLink, eventLink } = await createMeetLink(topic);
     await postToSlack(response_url, {
